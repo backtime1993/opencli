@@ -1,0 +1,4 @@
+/**
+ * Sinafinance stock rank
+ */
+export {};
