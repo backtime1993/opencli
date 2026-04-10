@@ -1,0 +1,66 @@
+name: Sync upstream & rebase custom patches
+
+on:
+  schedule:
+    - cron: '0 4 * * *'  # UTC 04:00 daily = CST 12:00
+  workflow_dispatch:       # manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/jackwener/opencli.git
+          git fetch upstream main
+
+      - name: Check if upstream has new commits
+        id: check
+        run: |
+          LOCAL_UPSTREAM=$(git merge-base HEAD upstream/main)
+          REMOTE_UPSTREAM=$(git rev-parse upstream/main)
+          if [ "$LOCAL_UPSTREAM" = "$REMOTE_UPSTREAM" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Already up to date"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Upstream has new commits"
+          fi
+
+      - name: Rebase custom commits onto upstream
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          UPSTREAM_BASE=$(git merge-base HEAD upstream/main)
+          CUSTOM_COMMITS=$(git rev-list --reverse "${UPSTREAM_BASE}..HEAD")
+          CUSTOM_COUNT=$(echo "$CUSTOM_COMMITS" | grep -c . || true)
+          echo "Custom commits to replay: $CUSTOM_COUNT"
+
+          git reset --hard upstream/main
+
+          for SHA in $CUSTOM_COMMITS; do
+            MSG=$(git log --oneline -1 "$SHA")
+            echo "Cherry-picking: $MSG"
+            if ! git cherry-pick "$SHA" --no-commit; then
+              echo "::warning::Conflict cherry-picking, attempting auto-resolve"
+              git checkout --theirs .
+              git add -A
+            fi
+            git commit --no-edit --allow-empty || true
+          done
+
+      - name: Push
+        if: steps.check.outputs.skip != 'true'
+        run: git push origin main --force-with-lease
