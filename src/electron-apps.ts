@@ -27,7 +27,7 @@ export interface ElectronAppEntry {
 
 export const builtinApps: Record<string, ElectronAppEntry> = {
   cursor:        { port: 9226, processName: 'Cursor',      bundleId: 'com.todesktop.runtime.Cursor',   displayName: 'Cursor' },
-  codex:         { port: 9222, processName: 'Codex',        bundleId: 'com.openai.codex',               displayName: 'Codex' },
+  codex:         { port: 9223, processName: 'Codex',        bundleId: 'com.openai.codex',               displayName: 'Codex' },
   chatwise:      { port: 9228, processName: 'ChatWise',     bundleId: 'com.chatwise.app',               displayName: 'ChatWise' },
   notion:        { port: 9230, processName: 'Notion',       bundleId: 'notion.id',                      displayName: 'Notion' },
   'discord-app': { port: 9232, processName: 'Discord',      bundleId: 'com.discord.app',                 displayName: 'Discord' },
