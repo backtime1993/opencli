@@ -44,11 +44,15 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         run: |
           UPSTREAM_BASE=$(git merge-base HEAD upstream/main)
-          CUSTOM_COMMITS=$(git rev-list --reverse "${UPSTREAM_BASE}..HEAD")
+          # Only replay source-level custom commits (skip build/ci commits)
+          CUSTOM_COMMITS=$(git rev-list --reverse "${UPSTREAM_BASE}..HEAD" -- src/ .github/)
           CUSTOM_COUNT=$(echo "$CUSTOM_COMMITS" | grep -c . || true)
           echo "Custom commits to replay: $CUSTOM_COUNT"
 
           git reset --hard upstream/main
+
+          # Restore our .gitignore (dist/ tracked)
+          sed -i 's|^dist/$|# dist/ is tracked in this fork for direct GitHub install|' .gitignore
 
           for SHA in $CUSTOM_COMMITS; do
             MSG=$(git log --oneline -1 "$SHA")
@@ -60,6 +64,19 @@ jobs:
             fi
             git commit --no-edit --allow-empty || true
           done
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.skip != 'true'
+        with:
+          node-version: 22
+
+      - name: Build dist
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          npm ci
+          npm run build
+          git add -f dist/ .gitignore
+          git commit -m "build: rebuild dist for GitHub install"
 
       - name: Push
         if: steps.check.outputs.skip != 'true'
