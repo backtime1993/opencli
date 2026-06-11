@@ -37097,6 +37097,8 @@
     "columns": [
       "rank",
       "author",
+      "userId",
+      "profileUrl",
       "text",
       "likes",
       "time",
