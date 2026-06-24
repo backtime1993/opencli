@@ -78,6 +78,20 @@ jobs:
           git add -f dist/ .gitignore
           git commit -m "build: rebuild dist for GitHub install"
 
+      - name: Preserve fork's workflow files
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          # GITHUB_TOKEN cannot create or update .github/workflows/*.yml files.
+          # Restore the workflow directory to fork's previous state so push succeeds.
+          # To propagate upstream workflow changes, configure a PAT with `workflow`
+          # scope as secrets.SYNC_PAT and use it in the checkout step above.
+          rm -rf .github/workflows
+          git checkout origin/main -- .github/workflows/
+          git add -A .github/workflows/
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: preserve fork workflow files (GITHUB_TOKEN limitation)"
+          fi
+
       - name: Push
         if: steps.check.outputs.skip != 'true'
         run: git push origin main --force-with-lease
