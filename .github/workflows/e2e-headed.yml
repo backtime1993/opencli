@@ -82,9 +82,13 @@ jobs:
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" \
             npx vitest run tests/e2e/ --reporter=verbose
+        env:
+          OPENCLI_BROWSER_EXECUTABLE_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
 
       - name: Run E2E tests (macOS / Windows)
         if: runner.os != 'Linux'
         env:
           OPENCLI_AX_E2E: '0'
         run: npx vitest run tests/e2e/ --reporter=verbose
+        env:
+          OPENCLI_BROWSER_EXECUTABLE_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
