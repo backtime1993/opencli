@@ -1,5 +1,5 @@
 node_modules/
-dist/
+# dist/ is tracked in this fork for direct GitHub install
 !extension/dist/
 *.tsbuildinfo
 .opencli/

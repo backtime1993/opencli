@@ -1,0 +1,135 @@
+/**
+ * HTTP client for communicating with the opencli daemon.
+ *
+ * Provides a typed send() function that posts a Command and returns a Result.
+ */
+import { sleep } from '../utils.js';
+import { BrowserConnectError } from '../errors.js';
+import { classifyBrowserError } from './errors.js';
+import { resolveProfileContextId } from './profile.js';
+import { DEFAULT_BROWSER_CONNECT_TIMEOUT } from './config.js';
+import { ensureBrowserBridgeReady } from './daemon-lifecycle.js';
+import { isPreDispatchError } from './bridge-readiness.js';
+import { fetchDaemonStatus, getDaemonHealth, requestDaemon, requestDaemonShutdown, } from './daemon-transport.js';
+let _idCounter = 0;
+function generateId() {
+    return `cmd_${process.pid}_${Date.now()}_${++_idCounter}`;
+}
+export class BrowserCommandError extends Error {
+    code;
+    hint;
+    constructor(message, code, hint) {
+        super(message);
+        this.code = code;
+        this.hint = hint;
+        this.name = 'BrowserCommandError';
+    }
+}
+export { fetchDaemonStatus, getDaemonHealth, requestDaemonShutdown, };
+/**
+ * Internal: send a command to the daemon and return the raw `DaemonResult`.
+ *
+ * Retry policy is explicit:
+ * - pre-dispatch bridge/profile errors: run the full daemon/extension ensure
+ *   path, then resend with a fresh transport id;
+ * - local TypeError before dispatch: same full ensure path, because the daemon
+ *   may be stopped/stale and needs spawn/replacement, not just polling;
+ * - `command_result_unknown` and AbortError: never retry automatically.
+ */
+async function sendCommandRaw(action, params) {
+    const maxAttempts = 4;
+    let dispatchRecoveryUsed = false;
+    let duplicateIdRetryUsed = false;
+    let transientRetryUsed = false;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const id = generateId();
+        const rawWindowMode = process.env.OPENCLI_WINDOW;
+        const envWindowMode = rawWindowMode === 'foreground' || rawWindowMode === 'background'
+            ? rawWindowMode
+            : undefined;
+        const contextId = params.contextId ?? resolveProfileContextId();
+        const windowMode = params.windowMode ?? envWindowMode;
+        const command = { id, action, ...params, ...(contextId && { contextId }), ...(windowMode && { windowMode }) };
+        try {
+            const res = await requestDaemon('/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(command),
+                timeout: 30000,
+            });
+            const result = (await res.json());
+            if (result.ok)
+                return result;
+            if (result.errorCode === 'command_result_unknown') {
+                throw new BrowserCommandError(result.error ?? 'Browser command result is unknown', result.errorCode, result.errorHint);
+            }
+            if (!dispatchRecoveryUsed && isPreDispatchError(result.errorCode)) {
+                dispatchRecoveryUsed = true;
+                await ensureBrowserBridgeReady({
+                    timeoutSeconds: DEFAULT_BROWSER_CONNECT_TIMEOUT,
+                    contextId,
+                    verbose: false,
+                });
+                continue;
+            }
+            const isDuplicateCommandId = res.status === 409
+                && !result.errorCode
+                && (result.error ?? '').includes('Duplicate command id');
+            if (isDuplicateCommandId && !duplicateIdRetryUsed) {
+                duplicateIdRetryUsed = true;
+                continue;
+            }
+            const advice = classifyBrowserError(new Error(result.error ?? ''));
+            if (advice.retryable && !transientRetryUsed) {
+                transientRetryUsed = true;
+                await sleep(advice.delayMs);
+                continue;
+            }
+            throw new BrowserCommandError(result.error ?? 'Daemon command failed', result.errorCode, result.errorHint);
+        }
+        catch (err) {
+            if (err instanceof BrowserCommandError || err instanceof BrowserConnectError)
+                throw err;
+            if (err instanceof Error && err.name === 'AbortError') {
+                throw new BrowserCommandError('Browser command timed out client-side; the page may still have applied it.', 'command_result_unknown', 'Inspect the page state before retrying. Idempotent reads are safe to retry; non-idempotent writes may have already happened.');
+            }
+            if (!dispatchRecoveryUsed && err instanceof TypeError) {
+                dispatchRecoveryUsed = true;
+                await ensureBrowserBridgeReady({
+                    timeoutSeconds: DEFAULT_BROWSER_CONNECT_TIMEOUT,
+                    contextId,
+                    verbose: false,
+                });
+                continue;
+            }
+            if (err instanceof Error) {
+                const advice = classifyBrowserError(err);
+                if (advice.retryable && !transientRetryUsed) {
+                    transientRetryUsed = true;
+                    await sleep(advice.delayMs);
+                    continue;
+                }
+            }
+            throw err;
+        }
+    }
+    throw new BrowserCommandError('sendCommand: max attempts exhausted', 'max_attempts_exhausted');
+}
+/**
+ * Send a command to the daemon and return the result data.
+ */
+export async function sendCommand(action, params = {}) {
+    const result = await sendCommandRaw(action, params);
+    return result.data;
+}
+/**
+ * Like sendCommand, but returns both data and page identity (targetId).
+ * Use this for page-scoped commands where the caller needs the page identity.
+ */
+export async function sendCommandFull(action, params = {}) {
+    const result = await sendCommandRaw(action, params);
+    return { data: result.data, page: result.page };
+}
+export async function bindTab(session, opts = {}) {
+    return sendCommand('bind', { session, surface: 'browser', ...opts });
+}
